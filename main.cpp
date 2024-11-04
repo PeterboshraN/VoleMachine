@@ -1,10 +1,4 @@
-#include <iostream>
-#include <vector>
-#include <sstream>
-#include <fstream>
-#include <iomanip>
-#include <string>
-#include <memory>
+#include <bits/stdc++.h>
 
 using namespace std;
 
@@ -24,17 +18,36 @@ private:
     vector<string> cells;
 
 public:
-    Memory() : cells(256, "00") {}
-    string read(int address) { return (address >= 0 && address < cells.size()) ? cells[address] : "00"; }
-    void write(int address, const string &value) { if (address >= 0 && address < cells.size()) cells[address] = value; }
+    Memory() : cells(256, "00") {
+        cells[0] = ""; // Set Memory[00] to an empty string
+    }
+
+    string read(int address) {
+        return (address >= 0 && address < cells.size()) ? cells[address] : "00";
+    }
+
+    void write(int address, const string &value) {
+        if (address >= 0 && address < cells.size())
+            cells[address] = value;
+    }
 
     void display() {
-        for (int i = 0; i < cells.size(); ++i) {
-            if (cells[i] != "00") // Only print non-empty memory cells
-                cout << "Memory[" << setw(3) << setfill('0') << i << "] = " << cells[i] << endl;
+        cout << "\nMemory Display:\n";
+        cout << "-------------------------------------------------\n";
+        cout << "| Address | Value                                  |\n";
+        cout << "-------------------------------------------------\n";
+        for (int i = 0; i < cells.size(); i++) {
+            if (cells[i] != "00") { // Only print non-default memory cells
+                cout << "| " << setw(3) << setfill('0') << hex << i << " | "
+                     << setw(4) << cells[i] << " |\n"; // Adjusted width for address
+            }
         }
+        cout << "-------------------------------------------------\n";
     }
+
 };
+
+
 
 class Instruction {
 public:
@@ -68,6 +81,20 @@ public:
     }
 };
 
+class LoadFromMemoryWithAddress : public Instruction {
+private:
+    int regIndex;    // Register index to load into
+    int address;     // Memory address to load from
+
+public:
+    LoadFromMemoryWithAddress(int reg, int addr) : regIndex(reg), address(addr) {}
+
+    void execute(Register *registers, Memory &memory, int &pc) override {
+        registers[regIndex].load_value(memory.read(address));
+        cout << "LOAD R" << regIndex << " from Memory[" << address << "] = " << registers[regIndex].get_value() << endl;
+    }
+};
+
 class StoreToMemory : public Instruction {
 private:
     int regIndex;
@@ -83,33 +110,158 @@ public:
 
 class Add : public Instruction {
 private:
-    int regDest;
-    int regSrc1;
-    int regSrc2;
+    int regDest;  // Destination register
+    int regSrc1;  // First source register
+    int regSrc2;  // Second source register
 
 public:
     Add(int dest, int src1, int src2) : regDest(dest), regSrc1(src1), regSrc2(src2) {}
+
     void execute(Register *registers, Memory &memory, int &pc) override {
-        int sum = registers[regSrc1].get_int_value() + registers[regSrc2].get_int_value();
+        // Interpret the hex values in the source registers as signed 8-bit integers
+        int value1 = static_cast<int8_t>(registers[regSrc1].get_int_value());
+        int value2 = static_cast<int8_t>(registers[regSrc2].get_int_value());
+
+        // Perform two's complement addition
+        int sum = value1 + value2;
+
+        // Convert the sum back to an 8-bit two's complement hexadecimal string
+        int result = static_cast<int8_t>(sum);  // Keep within 8-bit range
         stringstream ss;
-        ss << uppercase << hex << setw(2) << setfill('0') << sum; // Convert sum to hexadecimal string
+        ss << uppercase << hex << setw(2) << setfill('0') << (result & 0xFF);  // Mask to 8 bits
+
         registers[regDest].load_value(ss.str());
+
+        // Display the result of the operation
         cout << "ADD R" << regSrc1 << " and R" << regSrc2 << " into R" << regDest << " = " << registers[regDest].get_value() << endl;
     }
 };
+class AddFloat : public Instruction {
+private:
+    int regDest;  // Destination register
+    int regSrc1;  // First source register
+    int regSrc2;  // Second source register
+    const int bias = 4;
+
+public:
+    AddFloat(int dest, int src1, int src2) : regDest(dest), regSrc1(src1), regSrc2(src2) {}
+
+    void execute(Register *registers, Memory &memory, int &pc) override {
+        // Interpret register values as 8-bit floating-point representations
+        uint8_t val1 = registers[regSrc1].get_int_value();
+        uint8_t val2 = registers[regSrc2].get_int_value();
+
+        // Extract sign, exponent, and mantissa
+        int sign1 = (val1 >> 7) & 0x1;
+        int exponent1 = ((val1 >> 4) & 0x7) - bias; // Apply bias to exponent
+        int mantissa1 = val1 & 0xF;
+
+        int sign2 = (val2 >> 7) & 0x1;
+        int exponent2 = ((val2 >> 4) & 0x7) - bias; // Apply bias to exponent
+        int mantissa2 = val2 & 0xF;
+
+        // Adjust mantissas to normalized form
+        double float1 = pow(-1, sign1) * (mantissa1 / 16.0) * pow(2, exponent1);
+        double float2 = pow(-1, sign2) * (mantissa2 / 16.0) * pow(2, exponent2);
+
+        // Perform floating-point addition
+        double resultFloat = float1 + float2;
+
+        // Determine sign of result
+        int resultSign = resultFloat < 0 ? 1 : 0;
+        resultFloat = abs(resultFloat);
+
+        // Convert result back to 8-bit floating-point format
+        int resultExponent = 0;
+        int resultMantissa = 0;
+
+        if (resultFloat != 0) {
+            resultExponent = log2(resultFloat) + bias;
+            resultMantissa = static_cast<int>((resultFloat / pow(2, resultExponent - bias)) * 16) & 0xF;
+        }
+
+        // Pack into 8-bit format
+        uint8_t result = (resultSign << 7) | ((resultExponent & 0x7) << 4) | (resultMantissa & 0xF);
+
+        // Store result in destination register
+        stringstream ss;
+        ss << uppercase << hex << setw(2) << setfill('0') << (result & 0xFF);
+        registers[regDest].load_value(ss.str());
+
+        // Display the result of the operation
+        cout << "ADD_FLOAT R" << regSrc1 << " and R" << regSrc2 << " into R" << regDest
+             << " = " << registers[regDest].get_value() << endl;
+    }
+};
+
+
+class StoreToFixedMemory : public Instruction {
+private:
+    int regIndex;
+
+public:
+    StoreToFixedMemory(int reg) : regIndex(reg) {}
+
+    void execute(Register *registers, Memory &memory, int &pc) override {
+        string hexValue = registers[regIndex].get_value();
+
+        try {
+            int intValue = stoi(hexValue, nullptr, 16);
+            if (intValue >= 0 && intValue <= 127) { // Ensure it’s a valid ASCII range
+                char asciiChar = static_cast<char>(intValue);
+
+                // Retrieve current content in memory[0] and append the new ASCII character
+                string currentString = memory.read(0);
+                currentString += asciiChar;
+
+                // Store the updated string back to memory[0]
+                memory.write(0, currentString);
+
+                cout << "STORE R" << regIndex << " to Memory[00] as ASCII '" << asciiChar << "'; updated Memory[00] = \"" << currentString << "\"" << endl;
+            } else {
+                cout << "Value in R" << regIndex << " is out of ASCII range for Memory[00]." << endl;
+            }
+        } catch (const invalid_argument& e) {
+            cout << "Error: Invalid hex value in R" << regIndex << ": " << hexValue << endl;
+        } catch (const out_of_range& e) {
+            cout << "Error: Hex value in R" << regIndex << " is out of range: " << e.what() << endl;
+        }
+    }
+};
+
 
 class JumpIfEqual : public Instruction {
 private:
-    int regIndex;
-    int target;
+    int regIndex; // Register to compare with R0
+    int address;  // Address to jump to
 
 public:
-    JumpIfEqual(int reg, int tgt) : regIndex(reg), target(tgt) {}
+    JumpIfEqual(int reg, int& addr) : regIndex(reg), address(addr) {}
+
     void execute(Register *registers, Memory &memory, int &pc) override {
+        // Compare the contents of the specified register with R0
         if (registers[regIndex].get_value() == registers[0].get_value()) {
-            pc = target;
-            cout << "JUMP to instruction " << pc << " because R" << regIndex << " == R0" << endl;
+            // Set the program counter to the target address
+            pc = address; // Set PC to the target address directly
+            cout << "JUMP to instruction at memory address [" << pc << "]" << endl;
+        } else {
+            cout << "No JUMP: R" << regIndex << " != R0" << endl;
         }
+    }
+};
+
+
+class CopyRegister : public Instruction {
+private:
+    int sourceReg;
+    int destReg;
+
+public:
+    CopyRegister(int srcReg, int destReg) : sourceReg(srcReg), destReg(destReg) {}
+
+    void execute(Register *registers, Memory &memory, int &pc) override {
+        registers[destReg].load_value(registers[sourceReg].get_value());
+        cout << "COPY from R" << sourceReg << " to R" << destReg << " = " << registers[destReg].get_value() << endl;
     }
 };
 
@@ -133,66 +285,142 @@ public:
 
     void run() {
         while (programCounter >= 0 && programCounter < instructionSet.size()) {
+            int oldPC = programCounter;  // Save the current program counter
             instructionSet[programCounter]->execute(registers.data(), memory, programCounter);
-            display_status();
-            programCounter++; // Move to the next instruction
+
+            display_status(); // Show register and memory status after each instruction
+
+            // Only increment the program counter if it wasn't modified by the instruction
+            if (programCounter == oldPC) {
+                programCounter++;
+            }
+
+            // If the program counter is set to -1 (by a Halt instruction), stop the program.
+            if (programCounter == -1) {
+                break;
+            }
         }
     }
+
+
 
     void display_status() {
         cout << "\nRegisters Status:\n";
         for (int i = 0; i < registers.size(); ++i) {
             cout << "Register[" << i << "] = " << registers[i].get_value() << endl;
         }
+
         cout << "\nMemory Status:\n";
         memory.display(); // Show only non-empty memory cells
+
+        // Check if memory[0] is not empty and has a valid value for display
+        string hexValue = memory.read(0);
+        if (!hexValue.empty() && hexValue != "00") { // Ensure non-empty and non-default
+            try {
+                // Convert hex value "20" directly to a space character
+                if (hexValue == "20") {
+                    cout << "Expected value: <space>" << endl; // Explicitly display a space character
+                } else { // Handle other valid hex values
+                    int intValue = stoi(hexValue, nullptr, 16); // Convert hex string to integer
+                    if (intValue >= 0 && intValue <= 127) { // Printable ASCII range check
+                        char asciiChar = static_cast<char>(intValue);
+                        cout << "Expected value: " << asciiChar << endl;
+                    } else {
+                        cout << "Expected value: Non-printable ASCII character." << endl;
+                    }
+                }
+            } catch (const invalid_argument& e) {
+                cout << "Error: Invalid hex value in Memory[00]: " << hexValue << endl;
+            } catch (const out_of_range& e) {
+                cout << "Error: Hex value in Memory[00] is out of range: " << e.what() << endl;
+            }
+        } else {
+            cout << "Memory[00] is empty or contains default value '00'." << endl;
+        }
+
         cout << "Program Counter = " << programCounter << endl;
     }
 
+
     void manual_input() {
+        int startAddress;
+        cout << "Enter the starting memory address to store instructions: ";
+        cin >> startAddress;
+
         string instruction;
         cout << "Enter instructions (4 characters each, or 'C000' to finish): \n";
+        int address = startAddress;
         while (true) {
             cout << "Instruction: ";
             cin >> instruction;
-            if (instruction == "C000") {
-                break; // Exit if the user types "C000"
-            }
             if (instruction.length() == 4) {
                 char opcode = instruction[0];
                 int regIndex = instruction[1] - '0'; // Convert char to int for register index
                 string hexValue = instruction.substr(2); // Get the last two characters as hex string
                 switch (opcode) {
+                    case '1':{
+
+                        int memAddress = stoi(hexValue, nullptr, 16); // Convert the last two characters to an integer address
+                        instructionSet.push_back(make_unique<LoadFromMemoryWithAddress>(regIndex, memAddress));
+                        break;
+                    }
                     case '2': // LOAD immediate
                         instructionSet.push_back(make_unique<LoadImmediate>(regIndex, hexValue));
                         break;
                     case '3': // LOAD from memory
-                        instructionSet.push_back(make_unique<LoadFromMemory>(regIndex, stoi(hexValue, nullptr, 16)));
+                        if (hexValue == "00") {
+                            instructionSet.push_back(make_unique<StoreToFixedMemory>(regIndex));
+                        } else {
+                            instructionSet.push_back(make_unique<StoreToMemory>(regIndex, stoi(hexValue, nullptr, 16)));
+                        }
                         break;
-                    case '4': // STORE
-                        instructionSet.push_back(make_unique<StoreToMemory>(regIndex, stoi(hexValue, nullptr, 16)));
+                    case '4': // STORE or COPY
+                        if (instruction[1] == '0') { // Detecting the '40' prefix for copy
+                            int destReg = instruction[3] - '0'; // Get the destination register index
+                            instructionSet.push_back(make_unique<CopyRegister>(10, destReg)); // Assuming 'A' corresponds to index 10
+                        }
                         break;
-                    case '5': // ADD
-                        instructionSet.push_back(make_unique<Add>(regIndex, regIndex, stoi(hexValue, nullptr, 16))); // Example usage
+                    case '5': { // ADD
+                        int regDest = regIndex;
+                        int regSrc1 = instruction[2] - '0';
+                        int regSrc2 = instruction[3] - '0';
+                        instructionSet.push_back(make_unique<Add>(regDest, regSrc1, regSrc2));
                         break;
-                    case 'B': // JUMP if equal
-                        instructionSet.push_back(make_unique<JumpIfEqual>(regIndex, stoi(hexValue, nullptr, 16)));
+                    }
+                    case '6': { // Floating-point ADD
+                        int regDest = regIndex;
+                        int regSrc1 = instruction[2] - '0';
+                        int regSrc2 = instruction[3] - '0';
+                        instructionSet.push_back(make_unique<AddFloat>(regDest, regSrc1, regSrc2));
                         break;
+                    }
+                    case 'B': {
+
+                        int memAddress = stoi(hexValue); // Convert the last two characters to an integer address
+                        instructionSet.push_back(make_unique<JumpIfEqual>(regIndex,memAddress));
+                        break;
+                    }// JUMP if equal
                     case 'C': // HALT
                         instructionSet.push_back(make_unique<Halt>());
-                        break;
+                        memory.write(address, instruction); // Store HALT in memory
+                        cout << "HALT instruction added at Memory[" << address << "]. Stopping instruction input.\n";
+                        programCounter = 0; // Reset program counter for execution
+                        return; // Stop taking further instructions
                     default:
                         cout << "Invalid opcode: " << opcode << endl;
                         break;
                 }
-                memory.write(instructionSet.size() - 1, instruction); // Store instruction in memory
-                cout << "Instruction '" << instruction << "' added." << endl;
+                memory.write(address, instruction); // Store instruction in memory at specified address
+                cout << "Instruction '" << instruction << "' added at Memory[" << address << "]." << endl;
+                address++;
             } else {
                 cout << "Invalid instruction length. Instructions must be 4 characters long.\n";
             }
         }
-        programCounter = 0; // Reset program counter for execution
+    programCounter = 0; // Reset program counter for execution
     }
+
+
 
     void menu() {
         int choice;
@@ -223,40 +451,78 @@ public:
     void load_program(const string &filename) {
         ifstream file(filename);
         string instruction;
+
+        int startAddress;
+        cout << "Enter the starting memory address to store instructions: ";
+        cin >> startAddress;
+
+        int address = startAddress;
         while (file >> instruction) {
             if (instruction.length() == 4) {
                 char opcode = instruction[0];
                 int regIndex = instruction[1] - '0';
                 string hexValue = instruction.substr(2);
                 switch (opcode) {
+                    case '1':{
+
+                        int memAddress = stoi(hexValue, nullptr, 16); // Convert the last two characters to an integer address
+                        instructionSet.push_back(make_unique<LoadFromMemoryWithAddress>(regIndex, memAddress));
+                        break;
+                    }
                     case '2': // LOAD immediate
                         instructionSet.push_back(make_unique<LoadImmediate>(regIndex, hexValue));
                         break;
                     case '3': // LOAD from memory
-                        instructionSet.push_back(make_unique<LoadFromMemory>(regIndex, stoi(hexValue, nullptr, 16)));
+                        if (hexValue == "00") {
+                            instructionSet.push_back(make_unique<StoreToFixedMemory>(regIndex));
+                        } else {
+                            instructionSet.push_back(make_unique<LoadFromMemory>(regIndex, stoi(hexValue, nullptr, 16)));
+                        }
                         break;
-                    case '4': // STORE
-                        instructionSet.push_back(make_unique<StoreToMemory>(regIndex, stoi(hexValue, nullptr, 16)));
+                    case '4': // STORE or COPY
+                        if (hexValue[0] == '0') { // Detecting the '40' prefix for copy
+                            int destReg = hexValue[1] - '0'; // Get the destination register index
+                            instructionSet.push_back(make_unique<CopyRegister>(10, destReg)); // Assuming 'A' corresponds to index 10
+                        }
                         break;
-                    case '5': // ADD
-                        instructionSet.push_back(make_unique<Add>(regIndex, regIndex, stoi(hexValue, nullptr, 16))); // Example usage
+                    case '5': { // ADD
+                        int regDest = regIndex;
+                        int regSrc1 = instruction[2] - '0';
+                        int regSrc2 = instruction[3] - '0';
+                        instructionSet.push_back(make_unique<Add>(regDest, regSrc1, regSrc2));
                         break;
-                    case 'B': // JUMP if equal
-                        instructionSet.push_back(make_unique<JumpIfEqual>(regIndex, stoi(hexValue, nullptr, 16)));
+                    }
+                    case '6': { // Floating-point ADD
+                        int regDest = regIndex;
+                        int regSrc1 = instruction[2] - '0';
+                        int regSrc2 = instruction[3] - '0';
+                        instructionSet.push_back(make_unique<AddFloat>(regDest, regSrc1, regSrc2));
                         break;
+                    }
+                    case'B':{
+                        int memAddress = stoi(hexValue); // Convert the last two characters to an integer address
+                        instructionSet.push_back(make_unique<JumpIfEqual>(regIndex,memAddress));
+                        break;
+                        }// JUMP if equal
                     case 'C': // HALT
                         instructionSet.push_back(make_unique<Halt>());
-                        break;
+                        memory.write(address, instruction); // Store HALT in memory
+                        cout << "HALT instruction found. Stopping program loading at Memory[" << address << "].\n";
+                        programCounter = 0; // Reset program counter
+                        return; // Stop reading further instructions
                     default:
-                        cout << "Invalid opcode: " << opcode << endl;
+                        cout << "Invalid opcode in file: " << opcode << endl;
                         break;
                 }
+                memory.write(address, instruction); // Store in memory at specified address
+                address++;
+            } else {
+                cout << "Skipping invalid instruction in file: " << instruction << endl;
             }
         }
-        cout << "Program loaded from " << filename << endl;
+        programCounter = 0; // Reset program counter
     }
 };
-
 int main() {
     Machine machine;
     machine.menu();
